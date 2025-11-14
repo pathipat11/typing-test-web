@@ -18,7 +18,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import type { User } from "@supabase/supabase-js";
-
+import { useTypingSound } from "@/hooks/useTypingSound";
 
 
 type SentenceModeConfig = {
@@ -736,6 +736,8 @@ function TypingTestView({
   // focus invisible input
   const [inputFocused, setInputFocused] = useState(false);
 
+  const { playByKeyCode } = useTypingSound();
+
   useEffect(() => {
     if (config.mode === "sentence") {
       // ประโยคเดียว
@@ -805,13 +807,19 @@ function TypingTestView({
 
 
 
-  function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    const keyCode = (e as any).keyCode ?? (e as any).which;
+
     if (e.key === "Tab") {
       e.preventDefault();
+
+      // เล่นเสียง Tab (มีใน config.json → "tab.wav")
+      playByKeyCode(keyCode);
+
       if (config.mode === "sentence") {
         setTarget(SENTENCES[Math.floor(Math.random() * SENTENCES.length)]);
       } else {
-        const count = config.wordCount ?? 400;  // <- ตรงนี้สำคัญ
+        const count = config.wordCount ?? 400;
         setTarget(buildWordsText(count));
       }
 
@@ -825,6 +833,8 @@ function TypingTestView({
 
     if (e.key === "Escape") {
       e.preventDefault();
+      // (โดยปกติไม่มีเสียง ESC ใน config อยู่แล้ว แต่ไม่เป็นไรถ้าเรียกก็ไม่มีไฟล์)
+      playByKeyCode(keyCode);
       onExitToMenu();
       return;
     }
@@ -833,11 +843,15 @@ function TypingTestView({
     if (e.key === "Backspace") {
       e.preventDefault();
       if (!typed.length) return;
+
+      // 🔊 เสียง backspace
+      playByKeyCode(keyCode);
+
       setTyped((prev) => prev.slice(0, -1));
       return;
     }
 
-    // ignore control keys
+    // ignore control keys (Shift, Ctrl, Arrow ฯลฯ)
     if (e.key.length > 1) {
       return;
     }
@@ -851,6 +865,9 @@ function TypingTestView({
     if (typed.length >= target.length) {
       return;
     }
+
+    // 🔊 keypress ปกติ (a-z, space, etc.)
+    playByKeyCode(keyCode);
 
     setTyped((prev) => prev + e.key);
   }

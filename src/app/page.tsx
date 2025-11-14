@@ -23,12 +23,12 @@ import type { User } from "@supabase/supabase-js";
 
 type SentenceModeConfig = {
   mode: "sentence";
-  duration: number;
 };
 
 type WordsModeConfig = {
   mode: "words";
-  wordCount: number;
+  wordCount?: number;
+  duration?: number;
 };
 
 type Config = SentenceModeConfig | WordsModeConfig;
@@ -150,12 +150,20 @@ export default function HomePage() {
 
   const bestForCurrentConfig = useMemo(() => {
     if (!config) return undefined;
+
     if (config.mode === "sentence") {
-      return getBestForConfig("sentence", config.duration, null);
+      // sentence: ไม่มี param อื่น
+      return getBestForConfig("sentence", null, null);
     } else {
-      return getBestForConfig("words", null, config.wordCount);
+      // words: ถ้ามี duration -> timed, ถ้ามี wordCount -> fixed
+      return getBestForConfig(
+        "words",
+        config.duration ?? null,
+        config.wordCount ?? null
+      );
     }
   }, [config, getBestForConfig]);
+
 
   const isDark = theme === "dark";
   const themeClasses = {
@@ -195,7 +203,7 @@ export default function HomePage() {
     setFinalStats(null);
   }
 
-    async function handleTestFinished(stats: {
+  async function handleTestFinished(stats: {
     mode: Mode;
     duration?: number;
     wordCount?: number;
@@ -207,11 +215,11 @@ export default function HomePage() {
   }) {
     setFinalStats(stats);
 
-    // 1) เก็บลง localStorage (เหมือนเดิม)
+    // Local
     addScore({
       mode: stats.mode,
-      duration: stats.mode === "sentence" ? stats.duration ?? null : null,
-      wordCount: stats.mode === "words" ? stats.wordCount ?? null : null,
+      duration: stats.duration ?? null,
+      wordCount: stats.wordCount ?? null,
       wpm: stats.wpm,
       accuracy: stats.accuracy,
       elapsed: stats.elapsed,
@@ -219,7 +227,7 @@ export default function HomePage() {
       correct: stats.correct,
     });
 
-    // 2) ถ้ามี user ที่ล็อกอิน → ส่งขึ้น Supabase
+    // Cloud
     if (user) {
       try {
         const { data, error } = await supabase
@@ -227,10 +235,8 @@ export default function HomePage() {
           .insert({
             user_id: user.id,
             mode: stats.mode,
-            duration:
-              stats.mode === "sentence" ? stats.duration ?? null : null,
-            word_count:
-              stats.mode === "words" ? stats.wordCount ?? null : null,
+            duration: stats.duration ?? null,
+            word_count: stats.wordCount ?? null,
             wpm: stats.wpm,
             accuracy: stats.accuracy,
             elapsed: stats.elapsed,
@@ -238,7 +244,7 @@ export default function HomePage() {
             correct: stats.correct,
           })
           .select("*")
-          .single(); // ได้แถวที่เพิ่ง insert กลับมา
+          .single();
 
         if (!error && data) {
           setCloudScores((prev) => [
@@ -261,7 +267,6 @@ export default function HomePage() {
         console.error("Failed to save score to Supabase", err);
       }
     }
-
 
     setView("result");
   }
@@ -471,7 +476,15 @@ export default function HomePage() {
           {view === "menu" && (
             <MenuView
               themeClasses={themeClasses}
-              onSelectSentence={() => setView("config-sentence")}
+              // ▶ Sentence: เริ่ม test ทันที ใช้ประโยคเดียว
+              onSelectSentence={() =>
+                startTestWithConfig({ mode: "sentence" })
+              }
+
+              // ▶ Words (timed): ไปหน้าเลือกเวลา (ใช้ view เดิม config-sentence)
+              onSelectTimedWords={() => setView("config-sentence")}
+
+              // ▶ Words (fixed count): ของเดิม
               onSelectWords={() => setView("config-words")}
             />
           )}
@@ -481,7 +494,7 @@ export default function HomePage() {
               themeClasses={themeClasses}
               onBack={() => setView("menu")}
               onStart={(duration) =>
-                startTestWithConfig({ mode: "sentence", duration })
+                startTestWithConfig({ mode: "words", duration })
               }
             />
           )}
@@ -541,10 +554,12 @@ export default function HomePage() {
 function MenuView({
   themeClasses,
   onSelectSentence,
+  onSelectTimedWords,
   onSelectWords,
 }: {
   themeClasses: any;
   onSelectSentence: () => void;
+  onSelectTimedWords: () => void;
   onSelectWords: () => void;
 }) {
   return (
@@ -554,16 +569,22 @@ function MenuView({
         All results are saved locally in your browser.
         If you sign in, your runs are also saved to the cloud.
       </p>
-      <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto">
+      <div className="flex flex-col gap-3 w-full md:w-auto">
         <button
           onClick={onSelectSentence}
-          className={`flex-1 md:flex-none px-4 py-3 rounded-xl text-sm font-semibold ${themeClasses.buttonPrimary}`}
+          className={`px-4 py-3 rounded-xl text-sm font-semibold ${themeClasses.buttonPrimary}`}
         >
-          Sentence mode (timed)
+          Sentence mode (1 sentence)
+        </button>
+        <button
+          onClick={onSelectTimedWords}
+          className={`px-4 py-3 rounded-xl text-sm font-semibold ${themeClasses.buttonSecondary}`}
+        >
+          Words mode (timed)
         </button>
         <button
           onClick={onSelectWords}
-          className={`flex-1 md:flex-none px-4 py-3 rounded-xl text-sm font-semibold ${themeClasses.buttonSecondary}`}
+          className={`px-4 py-3 rounded-xl text-sm font-semibold ${themeClasses.buttonSecondary}`}
         >
           Words mode (25 / 50 / 100)
         </button>
@@ -589,7 +610,7 @@ function SentenceConfigView({
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">Sentence mode</h2>
+        <h2 className="text-xl font-semibold">Words mode (timed)</h2>
         <button
           onClick={onBack}
           className={`text-xs px-3 py-1 rounded-full ${themeClasses.buttonGhost}`}
@@ -598,8 +619,8 @@ function SentenceConfigView({
         </button>
       </div>
       <p className={`text-sm ${themeClasses.textMuted}`}>
-        Choose how long you want to type sentences. A random sentence will
-        appear, and the timer starts when you type your first key.
+        Choose how long you want to type random words. The test ends
+        automatically when the timer reaches zero.
       </p>
       <div className="flex flex-wrap gap-2 mt-2">
         {SENTENCE_DURATIONS.map((sec) => (
@@ -717,53 +738,71 @@ function TypingTestView({
 
   useEffect(() => {
     if (config.mode === "sentence") {
+      // ประโยคเดียว
       const randomSentence =
         SENTENCES[Math.floor(Math.random() * SENTENCES.length)];
       setTarget(randomSentence);
     } else {
-      setTarget(buildWordsText(config.wordCount));
+      const count =
+        config.wordCount != null ? config.wordCount : 400;
+      setTarget(buildWordsText(count));
     }
     setTyped("");
     setStartTime(null);
     setFinished(false);
   }, [config]);
 
+
   // stats
   const { elapsed, wpm, accuracy, remaining } = useTypingStats({
     target,
     typed,
-    mode: config.mode,
-    duration: config.mode === "sentence" ? config.duration : undefined,
+    duration: config.mode === "words" ? config.duration : undefined,
     startTime,
   });
 
+  
   // end conditions (monkeytype-style)
-  useEffect(() => {
-    if (finished) return;
-    if (!target) return;
-    if (!startTime) return; // ยังไม่เริ่มพิมพ์จริง
+    useEffect(() => {
+      if (finished) return;
+      if (!target) return;
+      if (!startTime) return; // ยังไม่เริ่ม
 
-    const reachedEnd = typed.length >= target.length;
+      const reachedEnd = typed.length >= target.length;
 
-    if (config.mode === "sentence") {
-      // หมดเวลา → จบ
-      if (remaining !== null && remaining <= 0) {
-        handleFinish();
+      const isSentence = config.mode === "sentence";
+      const isTimedWords =
+        config.mode === "words" && config.duration != null;
+      const isFixedWords =
+        config.mode === "words" &&
+        config.wordCount != null &&
+        config.duration == null;
+
+      if (isSentence) {
+        // ประโยคเดียว: จบเมื่อพิมพ์ครบ
+        if (reachedEnd) {
+          handleFinish();
+        }
         return;
       }
-      // พิมพ์ครบจำนวนตัวอักษรทั้งหมดของประโยค → จบ
-      if (reachedEnd) {
-        handleFinish();
+
+      if (isTimedWords) {
+        // words timed: จบเมื่อหมดเวลา
+        if (remaining !== null && remaining <= 0) {
+          handleFinish();
+        }
         return;
       }
-    } else {
-      // words mode: จบเมื่อพิมพ์ครบความยาวของ target
-      if (reachedEnd) {
-        handleFinish();
+
+      if (isFixedWords) {
+        // words fixed count: จบเมื่อพิมพ์ครบ
+        if (reachedEnd) {
+          handleFinish();
+        }
         return;
       }
-    }
-  }, [typed, target, remaining, finished, startTime, config.mode]);
+    }, [typed, target, remaining, finished, startTime, config]);
+
 
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
@@ -772,8 +811,10 @@ function TypingTestView({
       if (config.mode === "sentence") {
         setTarget(SENTENCES[Math.floor(Math.random() * SENTENCES.length)]);
       } else {
-        setTarget(buildWordsText(config.wordCount));
+        const count = config.wordCount ?? 400;  // <- ตรงนี้สำคัญ
+        setTarget(buildWordsText(count));
       }
+
       setTyped("");
       setStartTime(null);
       setFinished(false);
@@ -817,22 +858,37 @@ function TypingTestView({
   function handleFinish() {
     setFinished(true);
     const now = Date.now();
-    const elapsedMs =
-      startTime !== null ? now - startTime : 1;
+    const elapsedMs = startTime !== null ? now - startTime : 1;
     const elapsedSec = elapsedMs / 1000;
     const correctChars = countCorrectChars(typed, target);
     const minutes = elapsedSec / 60;
-    const wpmVal =
-      minutes > 0 ? (correctChars / 5) / minutes : 0;
+    const wpmVal = minutes > 0 ? (correctChars / 5) / minutes : 0;
     const accVal =
-      typed.length > 0
-        ? (correctChars / typed.length) * 100
-        : 100;
+      typed.length > 0 ? (correctChars / typed.length) * 100 : 100;
+
+    let resultDuration: number | undefined;
+    let resultWordCount: number | undefined;
+
+    if (config.mode === "sentence") {
+      // sentence: ไม่มี config พิเศษ
+      resultDuration = undefined;
+      resultWordCount = undefined;
+    } else {
+      // words
+      if (config.duration != null) {
+        // timed words
+        resultDuration = config.duration;
+      }
+      if (config.wordCount != null) {
+        // fixed words
+        resultWordCount = config.wordCount;
+      }
+    }
 
     onFinished({
       mode: config.mode,
-      duration: config.mode === "sentence" ? config.duration : undefined,
-      wordCount: config.mode === "words" ? config.wordCount : undefined,
+      duration: resultDuration,
+      wordCount: resultWordCount,
       wpm: wpmVal,
       accuracy: accVal,
       elapsed: elapsedSec,
@@ -840,6 +896,7 @@ function TypingTestView({
       correct: correctChars,
     });
   }
+
 
   function handleBlur() {
     setInputFocused(false);
@@ -849,16 +906,32 @@ function TypingTestView({
     setInputFocused(true);
   }
 
+  const isTimedWords = config.mode === "words" && config.duration != null;
+  const timeLabel = isTimedWords ? "Time left" : "Time";
+  const timeValue = isTimedWords
+    ? remaining !== null
+      ? `${remaining.toFixed(1)}s`
+      : `${(config.duration ?? 0).toFixed(1)}s`
+    : `${elapsed.toFixed(1)}s`;
+
+  let headerLabel = "";
+  if (config.mode === "sentence") {
+    headerLabel = "Sentence mode · 1 sentence";
+  } else if (config.duration != null) {
+    headerLabel = `Words mode · ${config.duration}s`;
+  } else if (config.wordCount != null) {
+    headerLabel = `Words mode · ${config.wordCount} words`;
+  } else {
+    headerLabel = "Words mode";
+  }
+
+
   return (
     <div className="space-y-4">
       {/* header */}
       <div className="flex items-center justify-between">
         <div className="text-sm">
-          <div className="font-semibold">
-            {config.mode === "sentence"
-              ? `Sentence mode · ${config.duration}s`
-              : `Words mode · ${config.wordCount} words`}
-          </div>
+          <div className="font-semibold">{headerLabel}</div>
           <div className={`text-xs ${themeClasses.textMuted}`}>
             ESC to exit · Focus the input box and start typing
           </div>
@@ -885,31 +958,33 @@ function TypingTestView({
           {accuracy.toFixed(1)}%
         </div>
         <div>
-          <span className="font-semibold">
-            {config.mode === "sentence"
-              ? "Time left"
-              : "Time"}
-          </span>
-          :{" "}
-          {config.mode === "sentence"
-            ? remaining !== null
-              ? `${remaining.toFixed(1)}s`
-              : `${config.duration.toFixed(1)}s`
-            : `${elapsed.toFixed(1)}s`}
+          <div>
+            <span className="font-semibold">{timeLabel}</span>: {timeValue}
+          </div>
         </div>
       </div>
 
       {/* target text */}
-      <div className="min-h-[140px] rounded-xl border px-4 py-3 text-lg leading-relaxed overflow-hidden" 
-      onClick={() => inputRef.current?.focus()}>
-        <TargetText
-          themeClasses={themeClasses}
-          target={target}
-          typed={typed}
-        />
+      <div
+        className="min-h-[140px] rounded-xl border px-4 py-3 text-lg leading-relaxed overflow-hidden"
+        onClick={() => inputRef.current?.focus()}
+      >
+        {isTimedWords ? (
+          <TimedWordsTarget
+            themeClasses={themeClasses}
+            target={target}
+            typed={typed}
+          />
+        ) : (
+          <TargetText
+            themeClasses={themeClasses}
+            target={target}
+            typed={typed}
+          />
+        )}
       </div>
 
-            {/* hidden input to capture keys */}
+      {/* hidden input to capture keys */}
       <div
         className="mt-3 cursor-pointer"
         onClick={() => inputRef.current?.focus()}
@@ -964,8 +1039,16 @@ function ResultView({
   onRetry: () => void;
   onMenu: () => void;
 }) {
-  const modeLabel =
-    stats.mode === "sentence" ? "Sentence" : "Words";
+  let modeLabel = "";
+  if (stats.mode === "sentence") {
+    modeLabel = "Sentence · 1 sentence";
+  } else if (stats.duration != null) {
+    modeLabel = `Words · ${stats.duration}s`;
+  } else if (stats.wordCount != null) {
+    modeLabel = `Words · ${stats.wordCount} words`;
+  } else {
+    modeLabel = "Words";
+  }
 
   return (
     <div className="space-y-4">
@@ -982,10 +1065,6 @@ function ResultView({
           </div>
           <p className={themeClasses.textMuted}>
             Mode: {modeLabel}
-            {stats.mode === "sentence" &&
-              ` · ${stats.duration}s`}
-            {stats.mode === "words" &&
-              ` · ${stats.wordCount} words`}
           </p>
           <ul className="mt-2 space-y-1">
             <li>
@@ -1413,8 +1492,12 @@ function StatsView({
                       </td>
                       <td className="px-2 py-2 whitespace-nowrap">
                         {s.mode === "sentence"
-                          ? `Sentence · ${s.duration ?? 0}s`
-                          : `Words · ${s.wordCount ?? 0}`}
+                          ? "Sentence · 1 sentence"
+                          : s.duration != null
+                            ? `Words · ${s.duration}s`
+                            : s.wordCount != null
+                              ? `Words · ${s.wordCount}`
+                              : "Words"}
                       </td>
                       <td className="px-2 py-2 text-right">
                         {Math.round(s.wpm)}
@@ -1456,19 +1539,15 @@ function countCorrectChars(typed: string, target: string): number {
 function useTypingStats({
   target,
   typed,
-  mode,
   duration,
   startTime,
 }: {
   target: string;
   typed: string;
-  mode: Mode;
   duration?: number;
   startTime: number | null;
 }) {
-  const [now, setNow] = useState<number>(() =>
-    Date.now()
-  );
+  const [now, setNow] = useState<number>(() => Date.now());
 
   useEffect(() => {
     if (!startTime) return;
@@ -1480,25 +1559,171 @@ function useTypingStats({
     return () => clearInterval(id);
   }, [startTime]);
 
-  const elapsedMs =
-    startTime !== null ? now - startTime : 0;
+  const elapsedMs = startTime !== null ? now - startTime : 0;
   const elapsed = elapsedMs / 1000;
   const minutes = elapsed / 60;
 
   const correct = countCorrectChars(typed, target);
-  const wpm =
-    minutes > 0 ? (correct / 5) / minutes : 0;
+  const wpm = minutes > 0 ? (correct / 5) / minutes : 0;
   const accuracy =
-    typed.length > 0
-      ? (correct / typed.length) * 100
-      : 100;
+    typed.length > 0 ? (correct / typed.length) * 100 : 100;
 
   const remaining =
-    mode === "sentence" && duration != null
-      ? Math.max(duration - elapsed, 0)
-      : null;
+    duration != null ? Math.max(duration - elapsed, 0) : null;
 
   return { elapsed, wpm, accuracy, remaining };
+}
+
+function TimedWordsTarget({
+  themeClasses,
+  target,
+  typed,
+}: {
+  themeClasses: any;
+  target: string;
+  typed: string;
+}) {
+  // แบ่ง target เป็นคำ
+  const words = target.split(" ");
+
+  type WordMeta = { word: string; start: number; end: number };
+  const meta: WordMeta[] = [];
+  let idx = 0;
+
+  for (const w of words) {
+    const start = idx;
+    const end = start + w.length;
+    meta.push({ word: w, start, end });
+    idx = end + 1; // +1 เผื่อ space ระหว่างคำ
+  }
+
+  if (meta.length === 0) {
+    return <div className="font-mono" />;
+  }
+
+  const caretIndex = typed.length; // caret = index global ของ char ถัดไป
+
+  // ---- กำหนดบรรทัดจากจำนวน "ตัวอักษร" ----
+  const MAX_CHARS_PER_LINE = 55; // ✅ ปรับตัวนี้ให้ตรงกับความกว้างกล่อง
+  const LINES_VISIBLE = 5;       // แสดงกี่บรรทัด
+  const CENTER_OFFSET = Math.floor(LINES_VISIBLE / 2);
+
+  type LineRange = { start: number; end: number };
+  const allLines: LineRange[] = [];
+
+  // สร้างบรรทัดเรียงตามตัวอักษร (ใช้ index จริงใน target)
+  let lineStart = meta[0].start;
+  let lastEnd = meta[0].end;
+
+  for (let i = 1; i < meta.length; i++) {
+    const m = meta[i];
+    const candidateEnd = m.end;
+    const candidateLen = candidateEnd - lineStart; // ความยาวถ้ารวมคำนี้เข้าไปด้วย
+
+    if (candidateLen > MAX_CHARS_PER_LINE) {
+      // ถ้าเกินความยาวที่กำหนด → ปิดบรรทัดเดิม แล้วเริ่มบรรทัดใหม่ที่คำนี้
+      allLines.push({ start: lineStart, end: lastEnd });
+
+      lineStart = m.start;
+      lastEnd = m.end;
+    } else {
+      // ยังอยู่บรรทัดเดียวกันได้
+      lastEnd = candidateEnd;
+    }
+  }
+
+  // push บรรทัดสุดท้าย
+  allLines.push({ start: lineStart, end: lastEnd });
+
+  // หา "บรรทัดที่ caret อยู่"
+  let currentLineIndex = 0;
+  for (let i = 0; i < allLines.length; i++) {
+    const line = allLines[i];
+    if (caretIndex <= line.end + 1) {
+      currentLineIndex = i;
+      break;
+    }
+    currentLineIndex = i;
+  }
+
+  // window รอบบรรทัดปัจจุบัน (ให้บรรทัดนี้อยู่กลาง ๆ)
+  const totalLines = allLines.length;
+  let startLine = Math.max(0, currentLineIndex - CENTER_OFFSET);
+  if (startLine + LINES_VISIBLE > totalLines) {
+    startLine = Math.max(0, totalLines - LINES_VISIBLE);
+  }
+  const endLine = Math.min(totalLines, startLine + LINES_VISIBLE);
+
+  const visibleLines = allLines.slice(startLine, endLine);
+
+  return (
+    <LinesWindow
+      themeClasses={themeClasses}
+      target={target}
+      typed={typed}
+      lines={visibleLines}
+    />
+  );
+}
+
+function LinesWindow({
+  themeClasses,
+  target,
+  typed,
+  lines,
+}: {
+  themeClasses: any;
+  target: string;
+  typed: string;
+  lines: { start: number; end: number }[];
+}) {
+  return (
+    <div className="font-mono text-center">
+      {lines.map((line, lineIdx) => {
+        const slice = target.slice(line.start, line.end);
+        const chars = slice.split("");
+
+        return (
+          <div key={lineIdx}>
+            {chars.map((ch, idx) => {
+              const globalIndex = line.start + idx; // index จริงใน target/typed
+              const typedChar = typed[globalIndex];
+
+              let cls = themeClasses.remaining;
+
+              if (typedChar != null) {
+                cls =
+                  typedChar === ch
+                    ? themeClasses.correct
+                    : themeClasses.incorrect;
+              }
+
+              const isCaret =
+                globalIndex === typed.length &&
+                typed.length < target.length;
+
+              const classes = [
+                cls,
+                isCaret ? "border-b-2 border-emerald-400 animate-pulse" : "",
+              ]
+                .filter(Boolean)
+                .join(" ");
+
+              return (
+                <span key={globalIndex} className={classes}>
+                  {ch}
+                </span>
+              );
+            })}
+          </div>
+        );
+      })}
+
+      {typed.length >= target.length && target.length > 0 && (
+        <span className="inline-block w-0.5 h-5 align-middle bg-emerald-400 animate-pulse ml-0.5" />
+      )}
+    </div>
+  );
 }
 
 function TargetText({
@@ -1513,14 +1738,12 @@ function TargetText({
   const chars = target.split("");
 
   return (
-    <div className="font-mono">
+    <div className="font-mono text-center">
       {chars.map((ch, idx) => {
         const typedChar = typed[idx];
 
-        // ยังไม่พิมพ์
         let cls = themeClasses.remaining;
 
-        // ถ้าพิมพ์แล้ว
         if (typedChar != null) {
           cls =
             typedChar === ch
@@ -1528,7 +1751,6 @@ function TargetText({
               : themeClasses.incorrect;
         }
 
-        // caret = ตัวถัดไปที่ต้องพิมพ์
         const isCaret = idx === typed.length && typed.length < target.length;
 
         const classes = [
@@ -1545,10 +1767,10 @@ function TargetText({
         );
       })}
 
-      {/* caret อยู่ท้ายสุด เมื่อพิมพ์ครบแล้ว (แบบ monkeytype ที่ยังมี cursor ต่อ) */}
       {typed.length >= target.length && target.length > 0 && (
         <span className="inline-block w-0.5 h-5 align-middle bg-emerald-400 animate-pulse ml-0.5" />
       )}
     </div>
   );
 }
+

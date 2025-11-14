@@ -65,20 +65,29 @@ export function useScores() {
     ): ScoreEntry | undefined {
         const filtered = scores.filter((s) => {
             if (s.mode !== mode) return false;
+
             if (mode === "sentence") {
+                return true; // รวมทุก sentence
+            }
+
+            if (duration != null) {
                 return s.duration === duration;
             }
-            if (mode === "words") {
+
+            if (wordCount != null) {
                 return s.wordCount === wordCount;
             }
-            return false;
+
+            return true;
         });
 
         if (!filtered.length) return undefined;
+
         return filtered.reduce((best, cur) =>
             cur.wpm > best.wpm ? cur : best
         );
     }
+
 
     function clearScores() {
         setScores([]);

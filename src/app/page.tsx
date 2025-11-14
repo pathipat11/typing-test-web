@@ -74,20 +74,24 @@ export default function HomePage() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  useEffect(() => {
+    useEffect(() => {
     let ignore = false;
 
-    supabase.auth
-      .getUser()
-      .then(({ data, error }) => {
+    async function checkUser() {
+      try {
+        const { data, error } = await supabase.auth.getUser();
         if (ignore) return;
         if (!error && data.user) {
           setUser(data.user);
         }
-      })
-      .finally(() => {
+      } catch (err) {
+        console.error("getUser error", err);
+      } finally {
         if (!ignore) setAuthChecked(true);
-      });
+      }
+    }
+
+    checkUser();
 
     const { data: sub } = supabase.auth.onAuthStateChange(
       (_event, session) => {
@@ -101,35 +105,42 @@ export default function HomePage() {
     };
   }, []);
 
-  useEffect(() => {
+    useEffect(() => {
     if (!user) {
       setCloudScores([]);
       setCloudError(null);
       return;
     }
 
-    setCloudLoading(true);
-    setCloudError(null);
+    let cancelled = false;
 
-    supabase
-      .from("typing_runs")
-      .select("*")
-      .eq("user_id", user.id)
-      .order("created_at", { ascending: true })
-      .then(({ data, error }) => {
+    async function loadCloudScores() {
+      setCloudLoading(true);
+      setCloudError(null);
+
+      try {
+        const { data, error } = await supabase
+          .from("typing_runs")
+          .select("*")
+          .eq("user_id", user!.id)
+          .order("created_at", { ascending: true });
+
+        if (cancelled) return;
+
         if (error) {
           console.error("Failed to fetch typing_runs", error);
           setCloudError(error.message);
+          setCloudScores([]);
           return;
         }
+
         if (!data) {
           setCloudScores([]);
           return;
         }
 
-        // map ให้หน้าตาเหมือน ScoreEntry
         const mapped: ScoreEntry[] = data.map((row: any) => ({
-          id: row.id, // ต้องมีในตาราง typing_runs
+          id: row.id,
           mode: row.mode,
           duration: row.duration,
           wordCount: row.word_count,
@@ -142,10 +153,24 @@ export default function HomePage() {
         }));
 
         setCloudScores(mapped);
-      })
-      .finally(() => {
-        setCloudLoading(false);
-      });
+      } catch (err) {
+        if (cancelled) return;
+        console.error("Failed to fetch typing_runs", err);
+        setCloudError(
+          err instanceof Error ? err.message : "Unknown error"
+        );
+      } finally {
+        if (!cancelled) {
+          setCloudLoading(false);
+        }
+      }
+    }
+
+    loadCloudScores();
+
+    return () => {
+      cancelled = true;
+    };
   }, [user]);
 
   const bestForCurrentConfig = useMemo(() => {
@@ -233,7 +258,7 @@ export default function HomePage() {
         const { data, error } = await supabase
           .from("typing_runs")
           .insert({
-            user_id: user.id,
+            user_id: user!.id,
             mode: stats.mode,
             duration: stats.duration ?? null,
             word_count: stats.wordCount ?? null,
@@ -357,7 +382,7 @@ export default function HomePage() {
             <span className={`hidden sm:inline text-[11px] ${themeClasses.textMuted}`}>
               {authChecked
                 ? user
-                  ? `Signed in as ${user.email}`
+                  ? `Signed in as ${user?.email}`
                   : "Guest mode"
                 : "Checking auth..."}
             </span>

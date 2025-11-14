@@ -80,5 +80,16 @@ export function useScores() {
         );
     }
 
-    return { scores, addScore, getBestForConfig };
+    function clearScores() {
+        setScores([]);
+        if (typeof window !== "undefined") {
+            try {
+                window.localStorage.removeItem(STORAGE_KEY);
+            } catch (err) {
+                console.error("Failed to clear scores", err);
+            }
+        }
+    }
+
+    return { scores, addScore, getBestForConfig, clearScores };
 }

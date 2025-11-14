@@ -6,6 +6,8 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { SENTENCES, buildWordsText } from "@/lib/typingData";
 import { Mode, useScores } from "@/hooks/useScores";
+import { supabase } from "@/lib/supabaseClient";
+import type { ScoreEntry } from "@/hooks/useScores";
 import {
   LineChart,
   Line,
@@ -15,6 +17,8 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import type { User } from "@supabase/supabase-js";
+
 
 
 type SentenceModeConfig = {
@@ -44,6 +48,9 @@ export default function HomePage() {
   const [view, setView] = useState<View>("menu");
   const [config, setConfig] = useState<Config | null>(null);
   const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [cloudScores, setCloudScores] = useState<ScoreEntry[]>([]);
+  const [cloudLoading, setCloudLoading] = useState(false);
+  const [cloudError, setCloudError] = useState<string | null>(null);
 
   const [finalStats, setFinalStats] = useState<{
     mode: Mode;
@@ -57,6 +64,89 @@ export default function HomePage() {
   } | null>(null);
 
   const { scores, addScore, getBestForConfig, clearScores } = useScores();
+
+  // 👉 Supabase auth state
+  const [user, setUser] = useState<User | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
+  const [showAuthBox, setShowAuthBox] = useState(false);
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let ignore = false;
+
+    supabase.auth
+      .getUser()
+      .then(({ data, error }) => {
+        if (ignore) return;
+        if (!error && data.user) {
+          setUser(data.user);
+        }
+      })
+      .finally(() => {
+        if (!ignore) setAuthChecked(true);
+      });
+
+    const { data: sub } = supabase.auth.onAuthStateChange(
+      (_event, session) => {
+        setUser(session?.user ?? null);
+      }
+    );
+
+    return () => {
+      ignore = true;
+      sub.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      setCloudScores([]);
+      setCloudError(null);
+      return;
+    }
+
+    setCloudLoading(true);
+    setCloudError(null);
+
+    supabase
+      .from("typing_runs")
+      .select("*")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: true })
+      .then(({ data, error }) => {
+        if (error) {
+          console.error("Failed to fetch typing_runs", error);
+          setCloudError(error.message);
+          return;
+        }
+        if (!data) {
+          setCloudScores([]);
+          return;
+        }
+
+        // map ให้หน้าตาเหมือน ScoreEntry
+        const mapped: ScoreEntry[] = data.map((row: any) => ({
+          id: row.id, // ต้องมีในตาราง typing_runs
+          mode: row.mode,
+          duration: row.duration,
+          wordCount: row.word_count,
+          wpm: row.wpm,
+          accuracy: row.accuracy,
+          elapsed: row.elapsed,
+          typed: row.typed,
+          correct: row.correct,
+          createdAt: row.created_at,
+        }));
+
+        setCloudScores(mapped);
+      })
+      .finally(() => {
+        setCloudLoading(false);
+      });
+  }, [user]);
 
   const bestForCurrentConfig = useMemo(() => {
     if (!config) return undefined;
@@ -105,7 +195,7 @@ export default function HomePage() {
     setFinalStats(null);
   }
 
-  function handleTestFinished(stats: {
+    async function handleTestFinished(stats: {
     mode: Mode;
     duration?: number;
     wordCount?: number;
@@ -116,7 +206,8 @@ export default function HomePage() {
     correct: number;
   }) {
     setFinalStats(stats);
-    // เก็บลง localStorage ผ่าน hook
+
+    // 1) เก็บลง localStorage (เหมือนเดิม)
     addScore({
       mode: stats.mode,
       duration: stats.mode === "sentence" ? stats.duration ?? null : null,
@@ -127,8 +218,124 @@ export default function HomePage() {
       typed: stats.typed,
       correct: stats.correct,
     });
+
+    // 2) ถ้ามี user ที่ล็อกอิน → ส่งขึ้น Supabase
+    if (user) {
+      try {
+        const { data, error } = await supabase
+          .from("typing_runs")
+          .insert({
+            user_id: user.id,
+            mode: stats.mode,
+            duration:
+              stats.mode === "sentence" ? stats.duration ?? null : null,
+            word_count:
+              stats.mode === "words" ? stats.wordCount ?? null : null,
+            wpm: stats.wpm,
+            accuracy: stats.accuracy,
+            elapsed: stats.elapsed,
+            typed: stats.typed,
+            correct: stats.correct,
+          })
+          .select("*")
+          .single(); // ได้แถวที่เพิ่ง insert กลับมา
+
+        if (!error && data) {
+          setCloudScores((prev) => [
+            ...prev,
+            {
+              id: data.id,
+              mode: data.mode,
+              duration: data.duration,
+              wordCount: data.word_count,
+              wpm: data.wpm,
+              accuracy: data.accuracy,
+              elapsed: data.elapsed,
+              typed: data.typed,
+              correct: data.correct,
+              createdAt: data.created_at,
+            },
+          ]);
+        }
+      } catch (err) {
+        console.error("Failed to save score to Supabase", err);
+      }
+    }
+
+
     setView("result");
   }
+
+
+  async function handleAuth(mode: "signin" | "signup") {
+    setAuthLoading(true);
+    setAuthError(null);
+
+    try {
+      if (!authEmail || !authPassword) {
+        setAuthError("กรุณากรอกอีเมลและรหัสผ่าน");
+        return;
+      }
+
+      if (mode === "signin") {
+        const { data, error } = await supabase.auth.signInWithPassword({
+          email: authEmail,
+          password: authPassword,
+        });
+
+        if (error) {
+          setAuthError(error.message);
+        } else {
+          setUser(data.user ?? data.session?.user ?? null);
+          setShowAuthBox(false);
+        }
+      } else {
+        // 🔽 signup
+        const { data, error } = await supabase.auth.signUp({
+          email: authEmail,
+          password: authPassword,
+        });
+
+        if (error) {
+          setAuthError(error.message);
+        } else {
+          const newUser = data.user ?? data.session?.user ?? null;
+
+          // ✅ สร้าง profile ให้ user คนนี้
+          if (newUser) {
+            try {
+              await supabase.from("profiles").insert({
+                id: newUser.id,  // ต้องตรงกับ primary key ของ profiles
+                email: newUser.email,
+                // ถ้ามี field อื่น เช่น display_name, avatar_url ก็ใส่เพิ่มได้
+              });
+            } catch (err) {
+              console.error("Failed to create profile", err);
+            }
+          }
+
+          setUser(newUser);
+          setShowAuthBox(false);
+        }
+      }
+    } catch (err: any) {
+      console.error(err);
+      setAuthError(err?.message ?? "Unknown error");
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+
+  async function handleSignOut() {
+    try {
+      await supabase.auth.signOut();
+      setUser(null);
+    } catch (err) {
+      console.error("Failed to sign out", err);
+    }
+  }
+
 
   return (
     <main
@@ -136,11 +343,20 @@ export default function HomePage() {
     >
       <div className={`w-full max-w-3xl`}>
         {/* top bar */}
-                <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center justify-between mb-4">
           <h1 className={`text-xl font-semibold ${themeClasses.accent}`}>
             Typing Test
           </h1>
           <div className="flex items-center gap-2">
+            {/* แสดงสถานะว่าตอนนี้ guest หรือ login แล้ว */}
+            <span className={`hidden sm:inline text-[11px] ${themeClasses.textMuted}`}>
+              {authChecked
+                ? user
+                  ? `Signed in as ${user.email}`
+                  : "Guest mode"
+                : "Checking auth..."}
+            </span>
+
             <button
               type="button"
               onClick={() => setView("stats")}
@@ -155,8 +371,99 @@ export default function HomePage() {
             >
               Theme: {theme === "dark" ? "Dark" : "Light"}
             </button>
+
+            {user ? (
+              <button
+                type="button"
+                onClick={handleSignOut}
+                className={`text-xs px-3 py-1 rounded-full border ${themeClasses.border} ${themeClasses.buttonDanger}`}
+              >
+                Logout
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowAuthBox((v) => !v)}
+                className={`text-xs px-3 py-1 rounded-full border ${themeClasses.border} ${themeClasses.buttonPrimary}`}
+              >
+                {showAuthBox ? "Close" : "Login / Sign up"}
+              </button>
+            )}
           </div>
-        </div>
+      </div>
+
+        {/* Auth box */}
+        {showAuthBox && !user && (
+          <div
+            className={`mb-4 rounded-2xl border ${themeClasses.border} ${themeClasses.card} p-4 text-xs space-y-3`}
+          >
+            <div className="flex items-center justify-between">
+              <div className="font-semibold text-sm">Sign in / Sign up</div>
+              <button
+                type="button"
+                onClick={() => setShowAuthBox(false)}
+                className={`px-2 py-1 rounded-full ${themeClasses.buttonGhost}`}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="grid gap-2">
+              <label className="flex flex-col gap-1">
+                <span className={themeClasses.textMuted}>Email</span>
+                <input
+                  type="email"
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  className="px-2 py-1 rounded-md border border-neutral-600 bg-transparent text-xs outline-none"
+                  placeholder="you@example.com"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className={themeClasses.textMuted}>Password</span>
+                <input
+                  type="password"
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  className="px-2 py-1 rounded-md border border-neutral-600 bg-transparent text-xs outline-none"
+                  placeholder="••••••••"
+                />
+              </label>
+
+              {authError && (
+                <p className="text-red-400 text-[11px]">
+                  {authError}
+                </p>
+              )}
+
+              <div className="flex flex-wrap gap-2 mt-1">
+                <button
+                  type="button"
+                  disabled={authLoading}
+                  onClick={() => handleAuth("signin")}
+                  className={`px-3 py-1 rounded-full ${themeClasses.buttonPrimary} disabled:opacity-60 disabled:cursor-not-allowed`}
+                >
+                  {authLoading ? "Signing in..." : "Sign in"}
+                </button>
+                <button
+                  type="button"
+                  disabled={authLoading}
+                  onClick={() => handleAuth("signup")}
+                  className={`px-3 py-1 rounded-full ${themeClasses.buttonSecondary} disabled:opacity-60 disabled:cursor-not-allowed`}
+                >
+                  {authLoading ? "Signing up..." : "Sign up"}
+                </button>
+              </div>
+
+              <p className={`text-[11px] ${themeClasses.textMuted}`}>
+                You can play as guest without an account.  
+                Logging in lets your runs be saved to Supabase.
+              </p>
+            </div>
+          </div>
+        )}
+
 
         <div
           className={`rounded-2xl shadow-lg p-6 md:p-8 ${themeClasses.card} border ${themeClasses.border}`}
@@ -209,13 +516,17 @@ export default function HomePage() {
               onMenu={() => setView("menu")}
             />
           )}
-
+          
           {view === "stats" && (
             <StatsView
               themeClasses={themeClasses}
-              scores={scores}
+              localScores={scores}
+              cloudScores={cloudScores}
               onBack={() => setView("menu")}
-              clearScores={clearScores}
+              clearLocalScores={clearScores}
+              isLoggedIn={!!user}
+              cloudLoading={cloudLoading}
+              cloudError={cloudError}
             />
           )}
         </div>
@@ -240,8 +551,8 @@ function MenuView({
     <div className="flex flex-col items-center gap-4 text-center">
       <h2 className="text-2xl font-bold mb-2">Welcome</h2>
       <p className={`text-sm mb-4 max-w-md ${themeClasses.textMuted}`}>
-        Choose a mode to start practicing your typing speed and accuracy,
-        similar to monkeytype. All results are saved locally in your browser.
+        All results are saved locally in your browser.
+        If you sign in, your runs are also saved to the cloud.
       </p>
       <div className="flex flex-col md:flex-row gap-3 w-full md:w-auto">
         <button
@@ -630,7 +941,6 @@ function TypingTestView({
 // -------------------
 // Result view
 // -------------------
-import type { ScoreEntry } from "@/hooks/useScores";
 
 function ResultView({
   themeClasses,
@@ -752,22 +1062,36 @@ function ResultView({
 
 function StatsView({
   themeClasses,
-  scores,
+  localScores,
+  cloudScores,
   onBack,
-  clearScores,
+  clearLocalScores,
+  isLoggedIn,
+  cloudLoading,
+  cloudError,
 }: {
   themeClasses: any;
-  scores: ScoreEntry[];
+  localScores: ScoreEntry[];
+  cloudScores: ScoreEntry[];
   onBack: () => void;
-  clearScores: () => void;
+  clearLocalScores: () => void;
+  isLoggedIn: boolean;
+  cloudLoading: boolean;
+  cloudError: string | null;
 }) {
-  const [modeFilter, setModeFilter] = useState<"all" | "sentence" | "words">("all");
 
-  // filter ตาม mode ที่เลือก
+  const [modeFilter, setModeFilter] = useState<"all" | "sentence" | "words">("all");
+  const [source, setSource] = useState<"local" | "cloud">("local");
+
+  const baseScores =
+    source === "local" ? localScores : cloudScores;
+
+
   const filteredByMode =
     modeFilter === "all"
-      ? scores
-      : scores.filter((s) => s.mode === modeFilter);
+      ? baseScores
+      : baseScores.filter((s) => s.mode === modeFilter);
+
 
   // เรียงจากเก่าสุด -> ใหม่สุด สำหรับกราฟ (จะได้อ่านซ้ายไปขวา)
   const trendSorted = [...filteredByMode].sort(
@@ -813,21 +1137,49 @@ function StatsView({
   function handleClear() {
     if (
       window.confirm(
-        "Clear all saved scores? This action cannot be undone."
+        "Clear all local scores? This action cannot be undone."
       )
     ) {
-      clearScores();
+      clearLocalScores();
     }
   }
+
 
   return (
     <div className="space-y-4">
       {/* header + actions */}
-      <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-2">
         <h2 className="text-xl font-semibold">
           Stats &amp; History
         </h2>
         <div className="flex items-center gap-2">
+          {/* source filter: Local / Cloud */}
+          <div className="flex text-xs rounded-full border px-1 py-0.5 overflow-hidden">
+            <button
+              type="button"
+              onClick={() => setSource("local")}
+              className={`px-2 py-0.5 rounded-full ${
+                source === "local"
+                  ? "bg-sky-500 text-neutral-900"
+                  : ""
+              }`}
+            >
+              Local
+            </button>
+            <button
+              type="button"
+              onClick={() => setSource("cloud")}
+              className={`px-2 py-0.5 rounded-full ${
+                source === "cloud"
+                  ? "bg-sky-500 text-neutral-900"
+                  : ""
+              }`}
+              disabled={!isLoggedIn}
+            >
+              Cloud
+            </button>
+          </div>
+
           {/* mode filter */}
           <div className="flex text-xs rounded-full border px-1 py-0.5 overflow-hidden">
             <button
@@ -865,13 +1217,16 @@ function StatsView({
             </button>
           </div>
 
-          <button
-            type="button"
-            onClick={handleClear}
-            className={`text-xs px-3 py-1 rounded-full ${themeClasses.buttonDanger}`}
-          >
-            Clear history
-          </button>
+          {/* clear เฉพาะ local */}
+          {source === "local" && (
+            <button
+              type="button"
+              onClick={handleClear}
+              className={`text-xs px-3 py-1 rounded-full ${themeClasses.buttonDanger}`}
+            >
+              Clear local
+            </button>
+          )}
 
           <button
             type="button"
@@ -882,6 +1237,27 @@ function StatsView({
           </button>
         </div>
       </div>
+      
+      {/* cloud status message */}
+      {source === "cloud" && (
+        <div className="text-[11px] mb-1">
+          {!isLoggedIn && (
+            <p className="text-red-400">
+              You are in guest mode. Please sign in to view cloud stats.
+            </p>
+          )}
+          {isLoggedIn && cloudLoading && (
+            <p className={themeClasses.textMuted}>
+              Loading cloud stats from Supabase...
+            </p>
+          )}
+          {isLoggedIn && cloudError && (
+            <p className="text-red-400">
+              Failed to load cloud stats: {cloudError}
+            </p>
+          )}
+        </div>
+      )}
 
       {totalRuns === 0 ? (
         <p className={themeClasses.textMuted}>

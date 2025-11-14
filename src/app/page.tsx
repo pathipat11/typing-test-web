@@ -6,6 +6,16 @@
 import { useEffect, useMemo, useState, useRef } from "react";
 import { SENTENCES, buildWordsText } from "@/lib/typingData";
 import { Mode, useScores } from "@/hooks/useScores";
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
+
 
 type SentenceModeConfig = {
   mode: "sentence";
@@ -759,13 +769,21 @@ function StatsView({
       ? scores
       : scores.filter((s) => s.mode === modeFilter);
 
-  // เรียงจาก run ล่าสุดไปหาเก่าสุด
-  const sorted = [...filteredByMode].sort(
+  // เรียงจากเก่าสุด -> ใหม่สุด สำหรับกราฟ (จะได้อ่านซ้ายไปขวา)
+  const trendSorted = [...filteredByMode].sort(
     (a, b) =>
-      new Date(b.createdAt).getTime() -
-      new Date(a.createdAt).getTime()
+      new Date(a.createdAt).getTime() -
+      new Date(b.createdAt).getTime()
   );
 
+  // ใช้แค่ล่าสุดไม่เกิน 50 run เพื่อไม่แน่นเกินไป
+  const chartData = trendSorted.slice(-50).map((s, idx) => ({
+    index: idx + 1,
+    wpm: Math.round(s.wpm),
+    label: new Date(s.createdAt).toLocaleString(),
+  }));
+
+  // สำหรับ summary ด้านบน ใช้ filter เดียวกัน
   const totalRuns = filteredByMode.length;
   const bestWpm =
     totalRuns > 0
@@ -784,6 +802,12 @@ function StatsView({
         ) / totalRuns
       : 0;
 
+  // recent table: ใหม่ -> เก่า
+  const sorted = [...filteredByMode].sort(
+    (a, b) =>
+      new Date(b.createdAt).getTime() -
+      new Date(a.createdAt).getTime()
+  );
   const recent = sorted.slice(0, 20);
 
   function handleClear() {
@@ -914,6 +938,61 @@ function StatsView({
             </div>
           </div>
 
+          {/* WPM trend chart */}
+          <div
+            className={`mt-4 rounded-xl border ${themeClasses.border} px-4 py-3`}
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-xs font-semibold uppercase tracking-wide">
+                WPM over time
+              </div>
+              <div className={`text-[11px] ${themeClasses.textMuted}`}>
+                Showing last {chartData.length} runs
+              </div>
+            </div>
+            <div className="h-56 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={chartData} margin={{ top: 5, right: 16, left: -10, bottom: 5 }}>
+                  <CartesianGrid strokeDasharray="3 3" opacity={0.3} />
+                  <XAxis
+                    dataKey="index"
+                    tick={{ fontSize: 10 }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 10 }}
+                    tickLine={false}
+                    axisLine={false}
+                    width={30}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      fontSize: 12,
+                    }}
+                    formatter={(value, name) => {
+                      if (name === "wpm") return [`${value} WPM`, "WPM"];
+                      return [value, name];
+                    }}
+                    labelFormatter={(_, payload) =>
+                      payload && payload[0]
+                        ? (payload[0].payload as any).label
+                        : ""
+                    }
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="wpm"
+                    stroke="#22c55e"
+                    strokeWidth={2}
+                    dot={{ r: 2 }}
+                    activeDot={{ r: 4 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
           {/* recent runs table */}
           <div
             className={`mt-4 rounded-xl border ${themeClasses.border} overflow-hidden`}
@@ -984,6 +1063,7 @@ function StatsView({
     </div>
   );
 }
+
 
 // -------------------
 // helpers
